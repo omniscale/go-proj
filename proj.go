@@ -49,6 +49,7 @@ import (
 	"unsafe"
 )
 
+// Proj represents a single coordinate reference system.
 type Proj struct {
 	p   C.projPJ
 	ctx C.projCtx
@@ -154,6 +155,7 @@ func (p *Proj) IsLatLong() bool {
 	return C.pj_is_latlong(p.p) != 0
 }
 
+// Transformer projects coordinates from Src to Dst.
 type Transformer struct {
 	Src *Proj
 	Dst *Proj
