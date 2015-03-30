@@ -194,8 +194,8 @@ func NewEPSGTransformer(srcEPSG, dstEPSG int) (Transformer, error) {
 var searchPaths []string
 var finderResults map[string]*C.char
 
-//export go_proj_finder
-func go_proj_finder(cname *C.char) *C.char {
+//export goProjFinder
+func goProjFinder(cname *C.char) *C.char {
 	name := C.GoString(cname)
 	path, ok := finderResults[name]
 	if !ok {

@@ -1,8 +1,8 @@
 package proj
 
-// extern char *go_proj_finder(char *name);
+// extern char *goProjFinder(char *name);
 //
 // char *go_proj_finder_wrapper(char *name) {
-//     return go_proj_finder(name);
+//     return goProjFinder(name);
 // }
 import "C"
