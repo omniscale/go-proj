@@ -159,10 +159,13 @@ type Transformer struct {
 	Dst *Proj
 }
 
+// Transform coordinates fron src to dst projection. Transforms coordinates in-place.
 func (t *Transformer) Transform(xs, ys []float64) error {
 	return t.Src.Transform(t.Dst, xs, ys)
 }
 
+// NewTransformer initializes new transformer with src and dst projection with
+// a full proj4 init string (e.g. "+proj=longlat +datum=WGS84 +no_defs").
 func NewTransformer(initSrc, initDst string) (Transformer, error) {
 	src, err := New(initSrc)
 	if err != nil {
@@ -175,6 +178,7 @@ func NewTransformer(initSrc, initDst string) (Transformer, error) {
 	return Transformer{Src: src, Dst: dst}, nil
 }
 
+// NewEPSGTransformer initializes a new transformer with src and dst projection by the numeric EPSG code.
 func NewEPSGTransformer(srcEPSG, dstEPSG int) (Transformer, error) {
 	src, err := NewEPSG(srcEPSG)
 	if err != nil {
