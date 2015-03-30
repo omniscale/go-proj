@@ -2,15 +2,15 @@
 Package proj transforms coordinates with libproj4.
 
 	// proj by EPSG code
-	wgs84, err := NewEPSG(4326)
+	wgs84, err := proj.NewEPSG(4326)
 	if err != nil {
-		t.Fatal(err)
+		log.Fatal(err)
 	}
 
 	// proj by proj4 definition string
-	utm32, err := New("+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+	utm32, err := proj.New("+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
 	if err != nil {
-		t.Fatal(err)
+		log.Fatal(err)
 	}
 
 	xs := []float64{8.15, 9.12}
@@ -18,7 +18,17 @@ Package proj transforms coordinates with libproj4.
 
 	// transform all coordinates to UTM 32 (in-place)
 	if err := wgs84.Transform(utm32, xs, ys); err != nil {
-		t.Fatal(err)
+		log.Fatal(err)
+	}
+
+
+	// transformer from src to dst projection
+	transf, err := proj.NewTransformer("+init=epsg:25832", "+init=epsg:3857")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := transf.Transform(xs, ys); err != nil {
+		log.Fatal(err)
 	}
 */
 package proj
@@ -142,6 +152,39 @@ func (p *Proj) Transform(dst *Proj, xs, ys []float64) error {
 // IsLatLong returns whether the projection uses lat/long coordinates, instead projected.
 func (p *Proj) IsLatLong() bool {
 	return C.pj_is_latlong(p.p) != 0
+}
+
+type Transformer struct {
+	Src *Proj
+	Dst *Proj
+}
+
+func (t *Transformer) Transform(xs, ys []float64) error {
+	return t.Src.Transform(t.Dst, xs, ys)
+}
+
+func NewTransformer(initSrc, initDst string) (Transformer, error) {
+	src, err := New(initSrc)
+	if err != nil {
+		return Transformer{}, err
+	}
+	dst, err := New(initDst)
+	if err != nil {
+		return Transformer{}, err
+	}
+	return Transformer{Src: src, Dst: dst}, nil
+}
+
+func NewEPSGTransformer(srcEPSG, dstEPSG int) (Transformer, error) {
+	src, err := NewEPSG(srcEPSG)
+	if err != nil {
+		return Transformer{}, err
+	}
+	dst, err := NewEPSG(dstEPSG)
+	if err != nil {
+		return Transformer{}, err
+	}
+	return Transformer{Src: src, Dst: dst}, nil
 }
 
 var searchPaths []string

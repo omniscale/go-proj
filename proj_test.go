@@ -91,6 +91,27 @@ func TestTransformError(t *testing.T) {
 	}
 }
 
+func TestNewTransformer(t *testing.T) {
+	xs := []float64{8.15, 9.12}
+	ys := []float64{53.2, 52.32}
+
+	transf, err := NewTransformer("+init=epsg:4326", "+init=epsg:3857")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transf.Transform(xs, ys); err != nil {
+		t.Fatal(err)
+	}
+
+	transf, err = NewEPSGTransformer(3857, 4326)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transf.Transform(xs, ys); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLatLong(t *testing.T) {
 	p, err := New("+init=epsg:4326")
 	if err != nil {
