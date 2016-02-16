@@ -46,6 +46,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"unsafe"
 )
 
@@ -153,6 +154,31 @@ func (p *Proj) Transform(dst *Proj, xs, ys []float64) error {
 // IsLatLong returns whether the projection uses lat/long coordinates, instead projected.
 func (p *Proj) IsLatLong() bool {
 	return C.pj_is_latlong(p.p) != 0
+}
+
+// Definition returns projection definition with +init/+datum expanded.
+func (p *Proj) Definition() string {
+	def := C.pj_get_def(p.p, 0) // options = 0
+	defer C.pj_dalloc(unsafe.Pointer(def))
+	return strings.TrimSpace(C.GoString(def))
+}
+
+func (p *Proj) String() string {
+	return "Proj(" + p.Definition() + ")"
+}
+
+// Unit returns the +units= value of the projection.
+// Returns degree for proj=longlat and an empty string for missing +units.
+func (p *Proj) Unit() string {
+	if p.IsLatLong() {
+		return "degree"
+	}
+	for _, part := range strings.Split(p.Definition(), " ") {
+		if strings.HasPrefix(part, "+units=") {
+			return part[7:]
+		}
+	}
+	return ""
 }
 
 // Transformer projects coordinates from Src to Dst.

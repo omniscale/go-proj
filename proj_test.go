@@ -178,6 +178,42 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestDefinition(t *testing.T) {
+	p, err := New("+init=epsg:4326")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := p.Definition(); d != "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" {
+		t.Error(d)
+	}
+	if s := p.String(); s != "Proj(+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0)" {
+		t.Error(s)
+	}
+}
+
+func TestUnits(t *testing.T) {
+	var tests = []struct {
+		epsg int
+		unit string
+	}{
+		{4326, "degree"},
+		{31467, "m"},
+		{2222, "ft"},
+		{2228, "us-ft"},
+		{2136, ""}, // not defined
+	}
+	for _, tt := range tests {
+		p, err := NewEPSG(tt.epsg)
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		if u := p.Unit(); u != tt.unit {
+			t.Errorf("%s != %s for %q", u, tt.unit, p)
+		}
+	}
+}
+
 func BenchmarkProj(b *testing.B) {
 	xs := []float64{8.15, 8.25, 8.75, 8.00}
 	ys := []float64{53.1, 53.2, 53.3, 53.3}
