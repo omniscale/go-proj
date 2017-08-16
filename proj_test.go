@@ -85,8 +85,8 @@ func TestTransformError(t *testing.T) {
 	}
 
 	xs = []float64{-81.15}
-	ys = []float64{90}
-	if err := p1.Transform(p2, xs, ys); !strings.Contains(err.Error(), "latitude or longitude exceeded limits") {
+	ys = []float64{90.1}
+	if err := p1.Transform(p2, xs, ys); err == nil || !strings.Contains(err.Error(), "latitude or longitude exceeded limits") {
 		t.Error("no/unexpected err from transformation:", err)
 	}
 }
