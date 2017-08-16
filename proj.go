@@ -47,6 +47,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"unsafe"
 )
 
@@ -219,11 +220,14 @@ func NewEPSGTransformer(srcEPSG, dstEPSG int) (Transformer, error) {
 	return Transformer{Src: src, Dst: dst}, nil
 }
 
+var finderMu sync.Mutex
 var searchPaths []string
 var finderResults map[string]*C.char
 
 //export goProjFinder
 func goProjFinder(cname *C.char) *C.char {
+	finderMu.Lock()
+	defer finderMu.Unlock()
 	name := C.GoString(cname)
 	path, ok := finderResults[name]
 	if !ok {
@@ -244,6 +248,8 @@ func goProjFinder(cname *C.char) *C.char {
 // SetSearchPaths add one or more directories to search for proj definition files.
 // Multiple calls overwrite the previous search paths.
 func SetSearchPaths(paths []string) {
+	finderMu.Lock()
+	defer finderMu.Unlock()
 	finderResults = make(map[string]*C.char)
 	searchPaths = paths
 	C.pj_set_finder((*[0]byte)(unsafe.Pointer(C.go_proj_finder_wrapper)))
