@@ -34,6 +34,7 @@ Package proj transforms coordinates with libproj4.
 package proj
 
 // #cgo LDFLAGS: -lproj
+// #define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H
 // #include <proj_api.h>
 // #include <stdlib.h>
 // extern char *go_proj_finder_wrapper(char *name);
