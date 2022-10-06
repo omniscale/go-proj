@@ -2,104 +2,161 @@ package proj
 
 import (
 	"math"
+	"os"
 	"strings"
 	"testing"
 )
 
-func TestTransform(t *testing.T) {
-	p1, err := New("+init=epsg:4326")
+// Test transformation of a single point with different axis orders.
+// 4326 and 31467 use lat/lon N/E axis order, 25832 uses E/N.
+// Check that normalization changes the order of 4326 and 31467, but not for 25832.
+// PROJ_USE_PROJ4_INIT_RULES should also change order and normalization should have no effect in this case.
+
+func TestTransformUTM(t *testing.T) {
+	// lat/lon and E/N
+	checkTransform(t, XY(53.2, 8.15), XY(443220.719, 5894856.508), "epsg:4326", "epsg:25832", false)
+}
+func TestTransformUTM_Normalize(t *testing.T) {
+	// lon/lat and E/N
+	checkTransform(t, XY(8.15, 53.2), XY(443220.719, 5894856.508), "epsg:4326", "epsg:25832", true)
+}
+
+func TestTransformUTM_Proj4Init(t *testing.T) {
+	// lat/lon and E/N
+	checkProj4InitTransform(t, XY(8.15, 53.2), XY(443220.719, 5894856.508), "+init=epsg:4326", "+init=epsg:25832", false)
+}
+func TestTransformUTM_Proj4InitNormalize(t *testing.T) {
+	// lon/lat and E/N
+	checkProj4InitTransform(t, XY(8.15, 53.2), XY(443220.719, 5894856.508), "+init=epsg:4326", "+init=epsg:25832", true)
+}
+func TestTransformGK(t *testing.T) {
+	// lat/lon and N/E
+	checkTransform(t, XY(53.2, 8.15), XY(5896773.991, 3443269.238), "epsg:4326", "epsg:31467", false)
+}
+func TestTransformGK_Normalize(t *testing.T) {
+	// lon/lat and E/N
+	checkTransform(t, XY(8.15, 53.2), XY(3443269.238, 5896773.991), "epsg:4326", "epsg:31467", true)
+}
+func TestTransformGK_Proj4Init(t *testing.T) {
+	// lat/lon and N/E
+	checkProj4InitTransform(t, XY(53.2, 8.15), XY(5896773.991, 3443269.238), "epsg:4326", "epsg:31467", false)
+}
+func TestTransformGK_Proj4InitNormalize(t *testing.T) {
+	// lon/lat and E/N
+	checkProj4InitTransform(t, XY(8.15, 53.2), XY(3443269.238, 5896773.991), "epsg:4326", "epsg:31467", true)
+}
+
+func checkProj4InitTransform(t *testing.T, src, expected Coord, projA, projB string, normalize bool) {
+	os.Setenv("PROJ_USE_PROJ4_INIT_RULES", "YES")
+	defer os.Setenv("PROJ_USE_PROJ4_INIT_RULES", "NO")
+	checkTransform(t, src, expected, projA, projB, normalize)
+}
+
+func checkTransform(t *testing.T, src, expected Coord, projA, projB string, normalize bool) {
+	p1, err := New(projA)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p1.Free()
-	p2, err := New("+init=epsg:25832")
+	p2, err := New(projB)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p2.Free()
 
-	xs := []float64{8.15}
-	ys := []float64{53.2}
+	if normalize {
+		if err := p1.NormalizeForVisualization(); err != nil {
+			t.Fatal(err)
+		}
+		if err := p2.NormalizeForVisualization(); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	if err := p1.Transform(p2, xs, ys); err != nil {
+	pts := []Coord{src}
+
+	if err := p1.Transform(p2, pts); err != nil {
 		t.Fatal(err)
 	}
 
-	if math.Abs(xs[0]-443220.719) > 0.01 {
-		t.Error(xs)
+	if math.Abs(pts[0].X-expected.X) > 0.01 {
+		t.Error(pts)
 	}
-	if math.Abs(ys[0]-5894856.508) > 0.01 {
-		t.Error(ys)
+	if math.Abs(pts[0].Y-expected.Y) > 0.01 {
+		t.Error(pts)
 	}
 
-	if err := p2.Transform(p1, xs, ys); err != nil {
+	if err := p2.Transform(p1, pts); err != nil {
 		t.Fatal(err)
 	}
 
-	if math.Abs(xs[0]-8.15) > 0.0001 {
-		t.Error(xs)
+	if math.Abs(pts[0].X-src.X) > 0.0001 {
+		t.Error(pts)
 	}
-	if math.Abs(ys[0]-53.2) > 0.0001 {
-		t.Error(ys)
+	if math.Abs(pts[0].Y-src.Y) > 0.0001 {
+		t.Error(pts)
 	}
 }
 
 func TestTransformError(t *testing.T) {
-	p1, err := New("+init=epsg:4326")
+	p1, err := New("epsg:4326")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := New("+init=epsg:25832")
+	p1.NormalizeForVisualization()
+	p2, err := New("epsg:25832")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p2.Free()
-	pinvalid, err := New("+init=epsg:999999")
+	p2.NormalizeForVisualization()
+	pinvalid, err := New("epsg:999999")
 	if err == nil {
 		t.Fatal("no error for unknown projection")
 	}
 
-	xs := []float64{8.15}
-	ys := []float64{53.2}
+	pts := []Coord{
+		XY(8.15, 53.2),
+	}
 
-	if err := p1.Transform(pinvalid, xs, ys); err == nil {
+	if err := p1.Transform(pinvalid, pts); err == nil {
 		t.Error("no err from transformation with nil")
 	}
 
-	if err := pinvalid.Transform(p1, xs, ys); err == nil {
+	if err := pinvalid.Transform(p1, pts); err == nil {
 		t.Error("no err from transformation with nil")
 	}
 
-	xs = []float64{8.15, 9.20}
-	if err := p1.Transform(p2, xs, ys); err == nil {
-		t.Error("no err from transformation with nil")
-	}
-	xs = []float64{8.15}
-	ys = []float64{53.2, 52.0}
-	if err := p1.Transform(p2, xs, ys); err == nil {
-		t.Error("no err from transformation with nil")
-	}
-
-	if err := p1.Transform(p2, nil, nil); err != nil {
+	if err := p1.Transform(p2, nil); err != nil {
 		t.Error("err from transformation with no coordinates")
 	}
 
-	xs = []float64{-81.15}
-	ys = []float64{90.1}
-	if err := p1.Transform(p2, xs, ys); err == nil || !strings.Contains(err.Error(), "latitude or longitude exceeded limits") {
+	pts = []Coord{
+		XY(-81.15, 90.1),
+	}
+	if err := p1.Transform(p2, pts); err == nil || !strings.Contains(err.Error(), "Invalid coordinate") {
 		t.Error("no/unexpected err from transformation:", err)
 	}
 }
 
 func TestNewTransformer(t *testing.T) {
-	xs := []float64{8.15, 9.12}
-	ys := []float64{53.2, 52.32}
+	pts := []Coord{
+		XY(8.15, 9.12),
+		XY(53.2, 52.32),
+	}
 
 	transf, err := NewTransformer("+init=epsg:4326", "+init=epsg:3857")
+	if err == nil || !strings.Contains(err.Error(), "Invalid PROJ string") {
+		t.Fatal(err)
+	}
+
+	os.Setenv("PROJ_USE_PROJ4_INIT_RULES", "YES")
+	defer os.Setenv("PROJ_USE_PROJ4_INIT_RULES", "NO")
+	transf, err = NewTransformer("+init=epsg:4326", "+init=epsg:3857")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transf.Transform(xs, ys); err != nil {
+	if err := transf.Transform(pts); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,13 +164,13 @@ func TestNewTransformer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := transf.Transform(xs, ys); err != nil {
+	if err := transf.Transform(pts); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLatLong(t *testing.T) {
-	p, err := New("+init=epsg:4326")
+	p, err := New("epsg:4326")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +178,7 @@ func TestLatLong(t *testing.T) {
 		t.Error("epsg:4326 is not LatLong")
 	}
 
-	p, err = New("+init=epsg:25832")
+	p, err = New("epsg:25832")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +203,8 @@ func TestNewEPSG(t *testing.T) {
 }
 
 func TestNew(t *testing.T) {
+	os.Setenv("PROJ_USE_PROJ4_INIT_RULES", "YES")
+	defer os.Setenv("PROJ_USE_PROJ4_INIT_RULES", "NO")
 	p, err := New("+init=epsg:4326")
 	if err != nil {
 		t.Fatal(err)
@@ -178,29 +237,39 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestDefinition(t *testing.T) {
-	p, err := New("+init=epsg:4326")
-	if err != nil {
-		t.Fatal(err)
+func TestDescription(t *testing.T) {
+	var tests = []struct {
+		epsg        int
+		description string
+	}{
+		{4326, "WGS 84"},
+		{31467, "DHDN / 3-degree Gauss-Kruger zone 3"},
+		{2222, "NAD83 / Arizona East (ft)"},
+		{2228, "NAD83 / California zone 4 (ftUS)"},
+		{2136, "Accra / Ghana National Grid"},
 	}
-	if d := p.Definition(); d != "+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" {
-		t.Error(d)
-	}
-	if s := p.String(); s != "Proj(+init=epsg:4326 +proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0)" {
-		t.Error(s)
+	for _, tt := range tests {
+		p, err := NewEPSG(tt.epsg)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if d := p.Description(); d != tt.description {
+			t.Error(d)
+		}
 	}
 }
 
-func TestUnits(t *testing.T) {
+func TestUnitName(t *testing.T) {
 	var tests = []struct {
 		epsg int
 		unit string
 	}{
 		{4326, "degree"},
-		{31467, "m"},
-		{2222, "ft"},
-		{2228, "us-ft"},
-		{2136, ""}, // not defined
+		{31467, "metre"},
+		{2222, "foot"},
+		{2228, "US survey foot"},
+		{2136, "Gold Coast foot"},
 	}
 	for _, tt := range tests {
 		p, err := NewEPSG(tt.epsg)
@@ -208,65 +277,36 @@ func TestUnits(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		if u := p.Unit(); u != tt.unit {
+		if u := p.UnitName(); u != tt.unit {
 			t.Errorf("%s != %s for %q", u, tt.unit, p)
 		}
 	}
 }
 
 func BenchmarkProj(b *testing.B) {
-	xs := []float64{8.15, 8.25, 8.75, 8.00}
-	ys := []float64{53.1, 53.2, 53.3, 53.3}
+	pts := []Coord{
+		XY(53.1, 8.15),
+		XY(53.2, 8.25),
+		XY(53.3, 8.75),
+		XY(53.3, 8.00),
+	}
 
-	p1, err := New("+init=epsg:4326")
+	p1, err := New("epsg:4326")
 	if err != nil {
 		b.Fatal(err)
 	}
-	p2, err := New("+init=epsg:25832")
+	p2, err := New("epsg:25832")
 	if err != nil {
 		b.Fatal(err)
 	}
 	for i := 0; i < b.N; i++ {
-		if err := p1.Transform(p2, xs, ys); err != nil {
+		if err := p1.Transform(p2, pts); err != nil {
 			b.Fatal(err)
 		}
-		if err := p2.Transform(p1, xs, ys); err != nil {
+		if err := p2.Transform(p1, pts); err != nil {
 			b.Fatal(err)
 		}
 	}
 	p1.Free()
 	p2.Free()
-}
-
-func TestSetSearchPath(t *testing.T) {
-	p1, err := New("+init=epsg:4326")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p1.Free()
-
-	p2, err := New("+init=test-epsg:99999")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	/// test-epsg contains 99999 projection with definition of 25832
-	SetSearchPaths([]string{"."})
-	p2, err = New("+init=test-epsg:99999")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	xs := []float64{8.15}
-	ys := []float64{53.2}
-
-	if err := p1.Transform(p2, xs, ys); err != nil {
-		t.Fatal(err)
-	}
-
-	if math.Abs(xs[0]-443220.719) > 0.01 {
-		t.Error(xs)
-	}
-	if math.Abs(ys[0]-5894856.508) > 0.01 {
-		t.Error(ys)
-	}
 }

@@ -1,91 +1,88 @@
 /*
-Package proj transforms coordinates with libproj4.
+Package proj transforms coordinates with Proj.
 
-	// proj by EPSG code
+	// New Proj by EPSG code.
 	wgs84, err := proj.NewEPSG(4326)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// proj by proj4 definition string
-	utm32, err := proj.New("+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+	// Proj by definition string.
+	utm32, err := proj.New("epsg:25832")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	xs := []float64{8.15, 9.12}
-	ys := []float64{53.2, 52.32}
+	pts := []proj.Coord{
+		proj.XY(53.2, 8.15),
+		proj.XY(52.32, 9.12),
+	}
 
-	// transform all coordinates to UTM 32 (in-place)
-	if err := wgs84.Transform(utm32, xs, ys); err != nil {
+	// Transform all coordinates to UTM 32 (in-place).
+	if err := wgs84.Transform(utm32, pts); err != nil {
 		log.Fatal(err)
 	}
 
 
-	// transformer from src to dst projection
-	transf, err := proj.NewTransformer("+init=epsg:25832", "+init=epsg:3857")
+	// All coordinates are expected to be in EPSG axis order.
+	// Call NormalizeForVisualization if your coordinates are always in lon/lat, E/N order.
+	wgs84.NormalizeForVisualization()
+	if err := wgs84.Transform(utm32, []proj.Coord{proj.XY(8.15, 53.2)}); err != nil {
+		log.Fatal(err)
+	}
+
+
+	// Transformer from src to dst projection.
+	transf, err := proj.NewTransformer("epsg:25832", "epsg:3857")
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := transf.Transform(xs, ys); err != nil {
+	if err := transf.Transform(pts); err != nil {
 		log.Fatal(err)
 	}
 */
 package proj
 
 // #cgo LDFLAGS: -lproj
-// #define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H
-// #include <proj_api.h>
+// #include <proj.h>
 // #include <stdlib.h>
-// extern char *go_proj_finder_wrapper(char *name);
 import "C"
 
 import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"unsafe"
 )
 
 // Proj represents a single coordinate reference system.
 type Proj struct {
-	p   C.projPJ
-	ctx C.projCtx
+	p          *C.PJ
+	ctx        *C.PJ_CONTEXT
+	normalized bool
 }
-
-const deg2Rad = math.Pi / 180.0
-const rad2Deg = 180.0 / math.Pi
 
 // NewEPSG initializes a new projection by the numeric EPSG code.
 func NewEPSG(epsgCode int) (*Proj, error) {
-	return New(fmt.Sprintf("+init=epsg:%d", epsgCode))
+	return New(fmt.Sprintf("epsg:%d", epsgCode))
 }
 
-// New initializes new projection with a full proj4 init string (e.g. "+proj=longlat +datum=WGS84 +no_defs").
+// New initializes new projection with a proj init string (e.g. "epsg:4326", or "+proj=longlat +datum=WGS84 +no_defs").
 func New(init string) (*Proj, error) {
-	ctx := C.pj_ctx_alloc()
-	if ctx == nil {
-		errnoRef := C.pj_get_errno_ref()
-		if errnoRef == nil {
-			return nil, errors.New("unknown error on pj_ctx_alloc")
-		}
-		return nil, errors.New(C.GoString(C.pj_strerrno(*errnoRef)))
-	}
+	ctx := C.proj_context_create()
+	C.proj_log_level(ctx, C.PJ_LOG_NONE)
 
 	c := C.CString(init)
 	defer C.free(unsafe.Pointer(c))
-	proj := C.pj_init_plus_ctx(ctx, c)
+	proj := C.proj_create(ctx, c)
 	if proj == nil {
-		errno := C.pj_ctx_get_errno(ctx)
-		return nil, errors.New(C.GoString(C.pj_strerrno(errno)))
+		errno := C.proj_context_errno(ctx)
+		return nil, errors.New(C.GoString(C.proj_context_errno_string(ctx, errno)))
 	}
 
-	p := &Proj{proj, ctx}
+	p := &Proj{p: proj, ctx: ctx}
 	runtime.SetFinalizer(p, free)
 	return p, nil
 }
@@ -97,88 +94,111 @@ func free(p *Proj) {
 // Free deallocates the projection immediately. Proj will be deallocated on garbage collection otherwise.
 func (p *Proj) Free() {
 	if p.p != nil {
-		C.pj_free(p.p)
+		C.proj_destroy(p.p)
 		p.p = nil
 	}
 	if p.ctx != nil {
-		C.pj_ctx_free(p.ctx)
+		C.proj_context_destroy(p.ctx)
 		p.ctx = nil
 	}
 }
 
+// NormalizeForVisualization converts axis order so that coordinates are always
+// x/y or long/lat axis order. The EPSG axis order is ignored when calling
+// Transform.
+func (p *Proj) NormalizeForVisualization() error {
+	if p.normalized {
+		return nil
+	}
+	// Try to normalize for visualization.
+	normProj := C.proj_normalize_for_visualization(p.ctx, p.p)
+	if normProj == nil {
+		errno := C.proj_context_errno(p.ctx)
+		return errors.New(C.GoString(C.proj_context_errno_string(p.ctx, errno)))
+	}
+
+	C.proj_destroy(p.p)
+	p.p = normProj
+	p.normalized = true
+	return nil
+}
+
+type Coord struct {
+	X, Y float64
+	Z    float64
+	T    float64
+}
+
+func XY(x, y float64) Coord {
+	return Coord{X: x, Y: y, Z: 0, T: math.MaxFloat64}
+}
+
 // Transform coordinates to dst projection. Transforms coordinates in-place.
-func (p *Proj) Transform(dst *Proj, xs, ys []float64) error {
+func (p *Proj) Transform(dst *Proj, pts []Coord) error {
 	if p == nil {
 		return errors.New("missing/invalid projection")
 	}
 	if dst == nil {
 		return errors.New("missing/invalid dst projection")
 	}
-	if len(xs) != len(ys) {
-		return errors.New("number of x and y coordinates differs")
-	}
-	if xs == nil || ys == nil {
+	if pts == nil {
 		return nil
 	}
 
-	if C.pj_is_latlong(p.p) != 0 {
-		for i := range xs {
-			xs[i] *= deg2Rad
-		}
-		for i := range ys {
-			ys[i] *= deg2Rad
-		}
-	}
-	r := C.pj_transform(p.p, dst.p, C.long(len(xs)), 0,
-		(*C.double)(unsafe.Pointer(&xs[0])),
-		(*C.double)(unsafe.Pointer(&ys[0])),
-		nil)
+	tr := C.proj_create_crs_to_crs_from_pj(p.ctx, p.p, dst.p, nil, nil)
+
+	r := C.proj_trans_array(tr, C.PJ_FWD, C.ulong(len(pts)), (*C.PJ_COORD)(unsafe.Pointer(&pts[0])))
 
 	if r != 0 {
-		errnoRef := C.pj_get_errno_ref()
-		if errnoRef == nil {
+		errnoRef := C.proj_context_errno(p.ctx)
+		if errnoRef == 0 {
 			return errors.New("unknown error")
 		}
-		return errors.New(C.GoString(C.pj_strerrno(*errnoRef)))
+		return errors.New(C.GoString(C.proj_context_errno_string(p.ctx, errnoRef)))
 	}
 
-	if C.pj_is_latlong(dst.p) != 0 {
-		for i := range xs {
-			xs[i] *= rad2Deg
-		}
-		for i := range ys {
-			ys[i] *= rad2Deg
-		}
-	}
 	return nil
 }
 
 // IsLatLong returns whether the projection uses lat/long coordinates, instead projected.
 func (p *Proj) IsLatLong() bool {
-	return C.pj_is_latlong(p.p) != 0
+	tp := C.proj_get_type(p.p)
+	return tp == C.PJ_TYPE_GEODETIC_CRS || tp == C.PJ_TYPE_GEOGRAPHIC_2D_CRS || tp == C.PJ_TYPE_GEOGRAPHIC_3D_CRS
 }
 
-// Definition returns projection definition with +init/+datum expanded.
-func (p *Proj) Definition() string {
-	def := C.pj_get_def(p.p, 0) // options = 0
-	defer C.pj_dalloc(unsafe.Pointer(def))
-	return strings.TrimSpace(C.GoString(def))
+// Definition returns projection description.
+func (p *Proj) Description() string {
+	info := C.proj_pj_info(p.p)
+	return strings.TrimSpace(C.GoString(info.description))
 }
 
 func (p *Proj) String() string {
-	return "Proj(" + p.Definition() + ")"
+	return "Proj(" + p.Description() + ")"
 }
 
-// Unit returns the +units= value of the projection.
-// Returns degree for proj=longlat and an empty string for missing +units.
-func (p *Proj) Unit() string {
-	if p.IsLatLong() {
-		return "degree"
+// Unit returns the unit name of the first axis.
+// Can return degree, meter or foot, but also long names like 'US survey foot'. Returns empty string if there is no unit name, or if there was an error.
+func (p *Proj) UnitName() string {
+	var unitName *C.char = nil
+
+	crs := C.proj_crs_get_coordinate_system(p.ctx, p.p)
+	defer C.proj_destroy(crs)
+
+	r := C.proj_cs_get_axis_info(p.ctx, crs, 0,
+		nil,       // out_name
+		nil,       // out_abbrev
+		nil,       // out_direction
+		nil,       // out_unit_conv_factor
+		&unitName, // out_unit_name
+		nil,       // out_unit_auth_name
+		nil,       // out_unit_code
+	)
+
+	if r == 0 {
+		return ""
 	}
-	for _, part := range strings.Split(p.Definition(), " ") {
-		if strings.HasPrefix(part, "+units=") {
-			return part[7:]
-		}
+	if unitName != nil {
+		return C.GoString(unitName)
 	}
 	return ""
 }
@@ -190,8 +210,15 @@ type Transformer struct {
 }
 
 // Transform coordinates fron src to dst projection. Transforms coordinates in-place.
-func (t *Transformer) Transform(xs, ys []float64) error {
-	return t.Src.Transform(t.Dst, xs, ys)
+func (t *Transformer) Transform(pts []Coord) error {
+	return t.Src.Transform(t.Dst, pts)
+}
+
+func (t *Transformer) NormalizeForVisualization() error {
+	if err := t.Src.NormalizeForVisualization(); err != nil {
+		return err
+	}
+	return t.Dst.NormalizeForVisualization()
 }
 
 // NewTransformer initializes new transformer with src and dst projection with
@@ -219,39 +246,4 @@ func NewEPSGTransformer(srcEPSG, dstEPSG int) (Transformer, error) {
 		return Transformer{}, err
 	}
 	return Transformer{Src: src, Dst: dst}, nil
-}
-
-var finderMu sync.Mutex
-var searchPaths []string
-var finderResults map[string]*C.char
-
-//export goProjFinder
-func goProjFinder(cname *C.char) *C.char {
-	finderMu.Lock()
-	defer finderMu.Unlock()
-	name := C.GoString(cname)
-	path, ok := finderResults[name]
-	if !ok {
-		for _, p := range searchPaths {
-			p = filepath.Join(p, name)
-			_, err := os.Stat(p)
-			if err == nil {
-				path = C.CString(p)
-				break
-			}
-		}
-		// cache result, even if it is nil
-		finderResults[name] = path
-	}
-	return path
-}
-
-// SetSearchPaths add one or more directories to search for proj definition files.
-// Multiple calls overwrite the previous search paths.
-func SetSearchPaths(paths []string) {
-	finderMu.Lock()
-	defer finderMu.Unlock()
-	finderResults = make(map[string]*C.char)
-	searchPaths = paths
-	C.pj_set_finder((*[0]byte)(unsafe.Pointer(C.go_proj_finder_wrapper)))
 }
