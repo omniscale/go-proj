@@ -103,6 +103,7 @@ func TestTransformError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer p1.Free()
 	p1.NormalizeForVisualization()
 	p2, err := New("epsg:25832")
 	if err != nil {
@@ -130,6 +131,26 @@ func TestTransformError(t *testing.T) {
 	if err := p1.Transform(p2, nil); err != nil {
 		t.Error("err from transformation with no coordinates")
 	}
+
+	pts = []Coord{}
+	if err := p1.Transform(p2, pts); err != nil {
+		t.Error("err from transformation with empty coordinates")
+	}
+
+	p2.Free()
+	pts = []Coord{
+		XY(8.15, 53.2),
+	}
+	if err := p1.Transform(p2, pts); err == nil {
+		t.Error("no err from transformation with freed dst projection")
+	}
+
+	p2, err = New("epsg:25832")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p2.Free()
+	p2.NormalizeForVisualization()
 
 	pts = []Coord{
 		XY(-81.15, 90.1),

@@ -72,14 +72,18 @@ func NewEPSG(epsgCode int) (*Proj, error) {
 // New initializes new projection with a proj init string (e.g. "epsg:4326", or "+proj=longlat +datum=WGS84 +no_defs").
 func New(init string) (*Proj, error) {
 	ctx := C.proj_context_create()
+	if ctx == nil {
+		return nil, errors.New("failed to create PROJ context")
+	}
 	C.proj_log_level(ctx, C.PJ_LOG_NONE)
 
 	c := C.CString(init)
 	defer C.free(unsafe.Pointer(c))
 	proj := C.proj_create(ctx, c)
 	if proj == nil {
-		errno := C.proj_context_errno(ctx)
-		return nil, errors.New(C.GoString(C.proj_context_errno_string(ctx, errno)))
+		err := projError(ctx, 0)
+		C.proj_context_destroy(ctx)
+		return nil, err
 	}
 
 	p := &Proj{p: proj, ctx: ctx}
@@ -110,11 +114,13 @@ func (p *Proj) NormalizeForVisualization() error {
 	if p.normalized {
 		return nil
 	}
+	if p.p == nil || p.ctx == nil {
+		return errors.New("missing/invalid projection")
+	}
 	// Try to normalize for visualization.
 	normProj := C.proj_normalize_for_visualization(p.ctx, p.p)
 	if normProj == nil {
-		errno := C.proj_context_errno(p.ctx)
-		return errors.New(C.GoString(C.proj_context_errno_string(p.ctx, errno)))
+		return projError(p.ctx, 0)
 	}
 
 	C.proj_destroy(p.p)
@@ -141,20 +147,32 @@ func (p *Proj) Transform(dst *Proj, pts []Coord) error {
 	if dst == nil {
 		return errors.New("missing/invalid dst projection")
 	}
-	if pts == nil {
+	if len(pts) == 0 {
 		return nil
 	}
 
+	// mark p/dst as in use to prevent that the GC calls the finalizer after
+	// proj_create_crs_to_crs_from_pj
+	defer runtime.KeepAlive(p)
+	defer runtime.KeepAlive(dst)
+
+	if p.p == nil || p.ctx == nil {
+		return errors.New("missing/invalid projection")
+	}
+	if dst.p == nil {
+		return errors.New("missing/invalid dst projection")
+	}
+
 	tr := C.proj_create_crs_to_crs_from_pj(p.ctx, p.p, dst.p, nil, nil)
+	if tr == nil {
+		return projError(p.ctx, 0)
+	}
+	defer C.proj_destroy(tr)
 
 	r := C.proj_trans_array(tr, C.PJ_FWD, C.ulong(len(pts)), (*C.PJ_COORD)(unsafe.Pointer(&pts[0])))
 
 	if r != 0 {
-		errnoRef := C.proj_context_errno(p.ctx)
-		if errnoRef == 0 {
-			return errors.New("unknown error")
-		}
-		return errors.New(C.GoString(C.proj_context_errno_string(p.ctx, errnoRef)))
+		return projError(p.ctx, r)
 	}
 
 	return nil
@@ -162,12 +180,18 @@ func (p *Proj) Transform(dst *Proj, pts []Coord) error {
 
 // IsLatLong returns whether the projection uses lat/long coordinates, instead projected.
 func (p *Proj) IsLatLong() bool {
+	if p.p == nil {
+		return false
+	}
 	tp := C.proj_get_type(p.p)
 	return tp == C.PJ_TYPE_GEODETIC_CRS || tp == C.PJ_TYPE_GEOGRAPHIC_2D_CRS || tp == C.PJ_TYPE_GEOGRAPHIC_3D_CRS
 }
 
 // Definition returns projection description.
 func (p *Proj) Description() string {
+	if p.p == nil {
+		return ""
+	}
 	info := C.proj_pj_info(p.p)
 	return strings.TrimSpace(C.GoString(info.description))
 }
@@ -179,9 +203,15 @@ func (p *Proj) String() string {
 // Unit returns the unit name of the first axis.
 // Can return degree, meter or foot, but also long names like 'US survey foot'. Returns empty string if there is no unit name, or if there was an error.
 func (p *Proj) UnitName() string {
+	if p.p == nil || p.ctx == nil {
+		return ""
+	}
 	var unitName *C.char = nil
 
 	crs := C.proj_crs_get_coordinate_system(p.ctx, p.p)
+	if crs == nil {
+		return ""
+	}
 	defer C.proj_destroy(crs)
 
 	r := C.proj_cs_get_axis_info(p.ctx, crs, 0,
@@ -230,6 +260,7 @@ func NewTransformer(initSrc, initDst string) (Transformer, error) {
 	}
 	dst, err := New(initDst)
 	if err != nil {
+		src.Free()
 		return Transformer{}, err
 	}
 	return Transformer{Src: src, Dst: dst}, nil
@@ -243,7 +274,22 @@ func NewEPSGTransformer(srcEPSG, dstEPSG int) (Transformer, error) {
 	}
 	dst, err := NewEPSG(dstEPSG)
 	if err != nil {
+		src.Free()
 		return Transformer{}, err
 	}
 	return Transformer{Src: src, Dst: dst}, nil
+}
+
+func projError(ctx *C.PJ_CONTEXT, errno C.int) error {
+	if errno == 0 && ctx != nil {
+		errno = C.proj_context_errno(ctx)
+	}
+	if errno == 0 {
+		return errors.New("unknown error")
+	}
+	msg := C.proj_context_errno_string(ctx, errno)
+	if msg == nil {
+		return fmt.Errorf("PROJ error %d", int(errno))
+	}
+	return errors.New(C.GoString(msg))
 }
